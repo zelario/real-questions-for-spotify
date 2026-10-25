@@ -18,6 +18,7 @@ env/
 .cache
 .cache.*
 .cache.bak
+.sessions/
 
 # Node & Frontend Build
 node_modules/

@@ -131,6 +131,19 @@ function SelectPlaylist({
   )
 }
 
+function apiFetch(url: string, options: RequestInit = {}) {
+  const sessionId = localStorage.getItem('rq_session_id')
+  const headers = new Headers(options.headers || {})
+  if (sessionId) {
+    headers.set('Authorization', `Bearer ${sessionId}`)
+  }
+  return fetch(url, {
+    ...options,
+    headers,
+    credentials: 'include',
+  })
+}
+
 export default function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null)
   const [view, setView] = useState<View | null>(null)
@@ -153,12 +166,19 @@ export default function App() {
     async function checkAuthAndLoad() {
       try {
         setError(null)
-        const authRes = await fetch(`${API_BASE}/api/auth/status`)
+        const params = new URLSearchParams(window.location.search)
+        const urlSessionId = params.get('session_id')
+        if (urlSessionId) {
+          localStorage.setItem('rq_session_id', urlSessionId)
+          window.history.replaceState({}, '', window.location.pathname)
+        }
+
+        const authRes = await apiFetch(`${API_BASE}/api/auth/status`)
         const authData: AuthStatus = await authRes.json()
         setAuth(authData)
 
         if (authData.authenticated) {
-          const res = await fetch(`${API_BASE}/api/playlists`)
+          const res = await apiFetch(`${API_BASE}/api/playlists`)
           if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to load playlists`)
           const data = await res.json()
           const list: PlaylistItem[] = data.playlists || []
@@ -181,7 +201,7 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${API_BASE}/api/playlists/${playlistId}/artists`)
+      const res = await apiFetch(`${API_BASE}/api/playlists/${playlistId}/artists`)
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch playlist artists`)
       const data = await res.json()
       setPlaylistArtists(data.artists || [])
@@ -202,7 +222,7 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${API_BASE}/api/compare?playlist_id1=${id1}&playlist_id2=${id2}`)
+      const res = await apiFetch(`${API_BASE}/api/compare?playlist_id1=${id1}&playlist_id2=${id2}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to compare playlists`)
       const data = await res.json()
       setCompareResult(data)
@@ -219,7 +239,7 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${API_BASE}/api/repeated-songs?limit=100`)
+      const res = await apiFetch(`${API_BASE}/api/repeated-songs?limit=100`)
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch duplicates`)
       const data = await res.json()
       setDuplicatesData(data)
@@ -236,7 +256,7 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${API_BASE}/api/repeated-artists?limit=50`)
+      const res = await apiFetch(`${API_BASE}/api/repeated-artists?limit=50`)
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch library artists`)
       const data = await res.json()
       setLibraryArtists(data.artists || [])
@@ -263,7 +283,8 @@ export default function App() {
 
   async function handleLogout() {
     try {
-      await fetch(`${API_BASE}/api/auth/logout`)
+      await apiFetch(`${API_BASE}/api/auth/logout`, { method: 'POST' })
+      localStorage.removeItem('rq_session_id')
       setAuth({ authenticated: false })
       setView(null)
       setPlaylists([])
@@ -272,7 +293,8 @@ export default function App() {
       setDuplicatesData(null)
       setLibraryArtists([])
     } catch {
-      // Ignored
+      localStorage.removeItem('rq_session_id')
+      setAuth({ authenticated: false })
     }
   }
 

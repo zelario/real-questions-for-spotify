@@ -1,23 +1,44 @@
 import os
+import re
+from pathlib import Path
 import concurrent.futures
 from dotenv import load_dotenv
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import CacheFileHandler, MemoryCacheHandler
 
 _ARTIST_IMAGE_CACHE: dict[str, str | None] = {}
+SESSIONS_DIR = Path(__file__).resolve().parent.parent.parent / ".sessions"
+SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_spotify_client() -> spotipy.Spotify:
-    """Initialize and return Spotify client using environment variables."""
+def sanitize_session_id(session_id: str | None) -> str | None:
+    if not session_id:
+        return None
+    cleaned = re.sub(r"[^a-zA-Z0-9_\-]", "", str(session_id))
+    return cleaned if len(cleaned) >= 8 else None
+
+
+def get_spotify_oauth(session_id: str | None = None) -> SpotifyOAuth:
     load_dotenv()
-    return spotipy.Spotify(
-        auth_manager=SpotifyOAuth(
-            client_id=os.getenv("SPOTIPY_CLIENT_ID"),
-            client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
-            redirect_uri=os.getenv("SPOTIPY_REDIRECT_URI"),
-            scope="playlist-read-private playlist-read-collaborative",
-        )
+    sid = sanitize_session_id(session_id)
+    if sid:
+        cache_handler = CacheFileHandler(cache_path=str(SESSIONS_DIR / f"{sid}.json"))
+    else:
+        cache_handler = MemoryCacheHandler()
+
+    return SpotifyOAuth(
+        client_id=os.getenv("SPOTIPY_CLIENT_ID"),
+        client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
+        redirect_uri=os.getenv("SPOTIPY_REDIRECT_URI"),
+        scope="playlist-read-private playlist-read-collaborative",
+        cache_handler=cache_handler,
     )
+
+
+def get_spotify_client(session_id: str | None = None) -> spotipy.Spotify:
+    oauth = get_spotify_oauth(session_id)
+    return spotipy.Spotify(auth_manager=oauth)
 
 
 def login(sp: spotipy.Spotify | None = None) -> dict:
