@@ -304,6 +304,7 @@ export default function App() {
     <main>
       <header>
         <a className="logo" href="#top" onClick={() => setView(null)}>
+          <img src="/real-questions.png" alt="" className="nav-logo-icon" />
           REAL QUESTIONS
           <span>(FOR SPOTIFY)</span>
         </a>
@@ -338,9 +339,12 @@ export default function App() {
 
       {!auth?.authenticated && (
         <div className="login-hero">
-          <a href={`${API_BASE}/api/auth/login`} className="login-btn-hero">
-            [ CONNECT SPOTIFY ]
-          </a>
+          <div className="login-hero-content">
+            <img src="/real-questions.png" alt="Real Questions" className="hero-logo" />
+            <a href={`${API_BASE}/api/auth/login`} className="login-btn-hero">
+              [ CONNECT SPOTIFY ]
+            </a>
+          </div>
         </div>
       )}
 

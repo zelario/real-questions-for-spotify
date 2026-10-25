@@ -86,13 +86,21 @@ header {
 
 .logo {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   color: var(--ink);
   font-size: 19px;
   font-weight: 700;
   letter-spacing: -0.04em;
   text-decoration: none;
+}
+
+.nav-logo-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  filter: brightness(0);
+  flex-shrink: 0;
 }
 
 .logo span,
@@ -762,11 +770,33 @@ footer {
 }
 
 .login-hero {
-  min-height: calc(80vh - 120px);
+  flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 32px;
+  padding: 48px 24px;
+}
+
+.login-hero-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 36px;
+  animation: apple-enter 0.55s var(--apple-ease) backwards;
+}
+
+.hero-logo {
+  width: 124px;
+  height: 124px;
+  object-fit: contain;
+  filter: brightness(0);
+  transition: transform var(--apple-fast) var(--apple-ease);
+}
+
+.hero-logo:hover {
+  transform: scale(1.05);
 }
 
 .login-btn-hero {
