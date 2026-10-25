@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.cache
+.cache.*
+.cache.bak
+node_modules/
+web/node_modules/
+.git/
+.gitignore
+.vscode/
+

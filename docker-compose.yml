@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    container_name: real-questions-spotify
+    ports:
+      - "8000:8000"
+      - "8888:8888"
+    env_file:
+      - .env
+    restart: unless-stopped
+

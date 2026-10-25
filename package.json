@@ -1,0 +1,10 @@
+{
+  "name": "real-questions-for-spotify",
+  "private": true,
+  "description": "Spotify library intelligence dashboard",
+  "scripts": {
+    "start": "python src/api.py",
+    "dev": "python src/api.py",
+    "build": "npm run build --prefix web"
+  }
+}
