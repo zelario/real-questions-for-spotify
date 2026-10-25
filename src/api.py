@@ -27,7 +27,7 @@ def get_frontend_redirect() -> str:
     if custom:
         return custom
     if (PROJECT_ROOT / "web" / "dist").exists() and not (PROJECT_ROOT / "web" / "node_modules").exists():
-        return "http://localhost:8000/"
+        return "/"
     return "http://localhost:5173/"
 
 
@@ -46,7 +46,7 @@ def start_callback_server(port: int = 8888):
                     pass
 
             self.send_response(302)
-            self.send_header("Location", get_frontend_redirect())
+            self.send_header("Location", os.getenv("FRONTEND_URL", "http://localhost:8000/"))
             self.end_headers()
 
         def log_message(self, format, *args):

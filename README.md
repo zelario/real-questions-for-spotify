@@ -1,4 +1,4 @@
-# REAL QUESTIONS (FOR SPOTIFY)
+# Real Questions (For Spotify)
 
 A fully vibecoded minimalist Spotify dashboard. Discover artist dominance, track overlaps, duplicates, and deep metrics across all your playlists that common apps don't tell you.
 
