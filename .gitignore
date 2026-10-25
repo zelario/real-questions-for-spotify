@@ -43,3 +43,7 @@ desktop.ini
 *.swp
 *.swo
 
+# IDE & Editor
+.vscode/
+.idea/
+
