@@ -523,6 +523,23 @@ export default function App() {
             )}
           </section>
         )}
+
+      <footer>
+        <div className="footer-brand">
+          <strong>© {new Date().getFullYear()} JOSÉ AMADO</strong>
+          <span>REAL QUESTIONS (FOR SPOTIFY)</span>
+        </div>
+        <div className="footer-meta">
+          <a
+            href="https://github.com/zelario/real-questions-for-spotify"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="footer-link"
+          >
+            [ GITHUB ]
+          </a>
+        </div>
+      </footer>
     </main>
   )
 }

@@ -71,6 +71,8 @@ select:focus-visible {
 
 main {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 header {
@@ -546,15 +548,48 @@ header p {
 
 footer {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  padding: 32px;
-  color: var(--muted);
-  font-size: 9px;
+  min-height: 72px;
+  padding: 0 32px;
+  background: var(--soft);
+  margin-top: auto;
 }
 
-footer a {
+.footer-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
   color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.footer-brand span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.footer-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.footer-link {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-decoration: none;
+  transition: color var(--apple-fast) var(--apple-ease);
+}
+
+.footer-link:hover {
+  color: var(--ink);
 }
 
 @media (max-width: 900px) {
@@ -690,9 +725,10 @@ footer a {
   }
 
   footer {
-    gap: 12px;
-    padding: 24px 16px;
-    flex-direction: column;
+    min-height: 64px;
+    padding: 0 16px;
+    flex-direction: row;
+    justify-content: space-between;
   }
 }
 
