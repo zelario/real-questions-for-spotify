@@ -525,10 +525,9 @@ export default function App() {
         )}
 
       <footer>
-        <div className="footer-brand">
-          <strong>© {new Date().getFullYear()} JOSÉ AMADO</strong>
-          <span>REAL QUESTIONS (FOR SPOTIFY)</span>
-        </div>
+        <span className="footer-copyright">
+          [© {new Date().getFullYear()} JOSÉ AMADO]
+        </span>
         <div className="footer-meta">
           <a
             href="https://github.com/zelario/real-questions-for-spotify"

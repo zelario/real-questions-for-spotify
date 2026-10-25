@@ -556,21 +556,11 @@ footer {
   margin-top: auto;
 }
 
-.footer-brand {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  color: var(--ink);
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-}
-
-.footer-brand span {
+.footer-copyright {
   color: var(--muted);
   font-size: 12px;
   font-weight: 400;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
 }
 
 .footer-meta {
@@ -582,7 +572,7 @@ footer {
 .footer-link {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.04em;
   text-decoration: none;
   transition: color var(--apple-fast) var(--apple-ease);
