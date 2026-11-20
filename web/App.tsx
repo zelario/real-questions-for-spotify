@@ -147,6 +147,65 @@ function SelectPlaylist({
   )
 }
 
+function getCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null
+  const escaped = name.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')
+  const match = document.cookie.match(new RegExp('(?:^|;\\s*)' + escaped + '=([^;]*)'))
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function setCookie(name: string, value: string, days = 365) {
+  if (typeof document === 'undefined') return
+  const expires = new Date(Date.now() + days * 864e5).toUTCString()
+  document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`
+}
+
+function getSavedExcludedForUser(userId?: string): Set<string> {
+  const keys = userId ? [`rq_excluded_${userId}`, 'rq_excluded_playlists'] : ['rq_excluded_playlists']
+  for (const k of keys) {
+    try {
+      const local = localStorage.getItem(k)
+      if (local) {
+        const parsed = JSON.parse(local)
+        if (Array.isArray(parsed) && parsed.length > 0) return new Set(parsed)
+      }
+    } catch {}
+
+    const raw = getCookie(k)
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed) && parsed.length > 0) return new Set(parsed)
+      } catch {
+        const items = raw.split(',').map((s) => s.trim()).filter(Boolean)
+        if (items.length > 0) return new Set(items)
+      }
+    }
+  }
+  return new Set()
+}
+
+function saveExcludedForUser(excluded: Set<string>, userId?: string) {
+  const arr = Array.from(excluded)
+  const jsonStr = JSON.stringify(arr)
+  if (userId) {
+    try {
+      localStorage.setItem(`rq_excluded_${userId}`, jsonStr)
+    } catch {}
+    setCookie(`rq_excluded_${userId}`, jsonStr)
+  }
+  try {
+    localStorage.setItem('rq_excluded_playlists', jsonStr)
+  } catch {}
+  setCookie('rq_excluded_playlists', jsonStr)
+
+  apiFetch(`${API_BASE}/api/user/excluded-playlists`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ excluded_ids: arr }),
+  }).catch(() => {})
+}
+
 function apiFetch(url: string, options: RequestInit = {}) {
   const sessionId = localStorage.getItem('rq_session_id')
   const headers = new Headers(options.headers || {})
@@ -166,6 +225,11 @@ export default function App() {
   const [playlists, setPlaylists] = useState<PlaylistItem[]>([])
   const [playlistA, setPlaylistA] = useState<string>('')
   const [playlistB, setPlaylistB] = useState<string>('')
+
+  const [excludedPlaylistIds, setExcludedPlaylistIds] = useState<Set<string>>(() => getSavedExcludedForUser())
+  const [draftExcluded, setDraftExcluded] = useState<Set<string>>(new Set())
+  const [showModal, setShowModal] = useState<boolean>(false)
+  const [searchFilter, setSearchFilter] = useState<string>('')
 
   const [playlistArtists, setPlaylistArtists] = useState<ArtistItem[]>([])
   const [compareResult, setCompareResult] = useState<CompareResponse | null>(null)
@@ -195,14 +259,33 @@ export default function App() {
         setAuth(authData)
 
         if (authData.authenticated) {
+          const stored = getSavedExcludedForUser(authData.user_id)
+          if (stored.size > 0) {
+            setExcludedPlaylistIds(stored)
+          }
+
           const res = await apiFetch(`${API_BASE}/api/playlists`)
           if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to load playlists`)
           const data = await res.json()
           const list: PlaylistItem[] = data.playlists || []
           setPlaylists(list)
-          if (list.length > 0) {
-            setPlaylistA(list[0].id)
-            setPlaylistB(list.length > 1 ? list[1].id : list[0].id)
+
+          if (
+            stored.size === 0 &&
+            Array.isArray(data.saved_excluded_ids) &&
+            data.saved_excluded_ids.length > 0
+          ) {
+            const fromBackend = new Set<string>(data.saved_excluded_ids)
+            setExcludedPlaylistIds(fromBackend)
+            saveExcludedForUser(fromBackend, authData.user_id)
+          }
+
+          const currentExcluded = stored.size > 0 ? stored : (data.saved_excluded_ids ? new Set<string>(data.saved_excluded_ids) : new Set<string>())
+          const activeList = list.filter((p) => !currentExcluded.has(p.id))
+          const validList = activeList.length > 0 ? activeList : list
+          if (validList.length > 0) {
+            setPlaylistA(validList[0].id)
+            setPlaylistB(validList.length > 1 ? validList[1].id : validList[0].id)
           }
         }
       } catch (err: any) {
@@ -211,6 +294,44 @@ export default function App() {
     }
     checkAuthAndLoad()
   }, [])
+
+  // Modal helpers with draft state (prevents hammering Spotify API while picking playlists)
+  const openModal = useCallback(() => {
+    setDraftExcluded(new Set(excludedPlaylistIds))
+    setSearchFilter('')
+    setShowModal(true)
+  }, [excludedPlaylistIds])
+
+  const toggleDraftExclusion = useCallback((playlistId: string) => {
+    setDraftExcluded((prev) => {
+      const next = new Set(prev)
+      if (next.has(playlistId)) {
+        next.delete(playlistId)
+      } else {
+        next.add(playlistId)
+      }
+      return next
+    })
+  }, [])
+
+  const selectAllDraft = useCallback(() => {
+    setDraftExcluded(new Set())
+  }, [])
+
+  const deselectAllDraft = useCallback(() => {
+    setDraftExcluded(new Set(playlists.map((p) => p.id)))
+  }, [playlists])
+
+  const handleSaveAndApply = useCallback(() => {
+    const next = new Set(draftExcluded)
+    setExcludedPlaylistIds(next)
+    saveExcludedForUser(next, auth?.user_id)
+    // Clear fetched stats to recalculate with newly selected playlists
+    setDuplicatesData(null)
+    setLibraryArtists([])
+    setLibraryAlbums([])
+    setShowModal(false)
+  }, [draftExcluded, auth?.user_id])
 
   // 2. Fetch Playlist A Artists
   const fetchPlaylistArtists = useCallback(async (playlistId: string) => {
@@ -256,7 +377,11 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await apiFetch(`${API_BASE}/api/repeated-songs?limit=100`)
+      const excParam =
+        excludedPlaylistIds.size > 0
+          ? `&excluded_ids=${Array.from(excludedPlaylistIds).join(',')}`
+          : ''
+      const res = await apiFetch(`${API_BASE}/api/repeated-songs?limit=100${excParam}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch duplicates`)
       const data = await res.json()
       setDuplicatesData(data)
@@ -265,7 +390,7 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [duplicatesData])
+  }, [duplicatesData, excludedPlaylistIds])
 
   // 5. Fetch Dominant Artists
   const fetchLibraryArtists = useCallback(async () => {
@@ -273,7 +398,11 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await apiFetch(`${API_BASE}/api/repeated-artists?limit=50`)
+      const excParam =
+        excludedPlaylistIds.size > 0
+          ? `&excluded_ids=${Array.from(excludedPlaylistIds).join(',')}`
+          : ''
+      const res = await apiFetch(`${API_BASE}/api/repeated-artists?limit=50${excParam}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch library artists`)
       const data = await res.json()
       setLibraryArtists(data.artists || [])
@@ -282,7 +411,7 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [libraryArtists.length])
+  }, [libraryArtists.length, excludedPlaylistIds])
 
   // 6. Fetch Dominant Albums
   const fetchLibraryAlbums = useCallback(async () => {
@@ -290,7 +419,11 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await apiFetch(`${API_BASE}/api/repeated-albums?limit=50`)
+      const excParam =
+        excludedPlaylistIds.size > 0
+          ? `&excluded_ids=${Array.from(excludedPlaylistIds).join(',')}`
+          : ''
+      const res = await apiFetch(`${API_BASE}/api/repeated-albums?limit=50${excParam}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch library albums`)
       const data = await res.json()
       setLibraryAlbums(data.albums || [])
@@ -299,23 +432,10 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [libraryAlbums.length])
+  }, [libraryAlbums.length, excludedPlaylistIds])
 
-  // Trigger relevant API call when view or playlist selection changes
-  useEffect(() => {
-    if (!auth?.authenticated) return
-    if (view === 'playlist' && playlistA) {
-      fetchPlaylistArtists(playlistA)
-    } else if (view === 'overlap' && playlistA && playlistB) {
-      fetchCompare(playlistA, playlistB)
-    } else if (view === 'duplicates') {
-      fetchDuplicates()
-    } else if (view === 'artists') {
-      fetchLibraryArtists()
-    } else if (view === 'albums') {
-      fetchLibraryAlbums()
-    }
-  }, [auth?.authenticated, view, playlistA, playlistB, fetchPlaylistArtists, fetchCompare, fetchDuplicates, fetchLibraryArtists, fetchLibraryAlbums])
+  // Notice: Automatic fetch on view change has been removed.
+  // Requests are now triggered strictly on explicit user button click to preserve Spotify API quota.
 
   async function handleLogout() {
     try {
@@ -323,6 +443,8 @@ export default function App() {
       localStorage.removeItem('rq_session_id')
       setAuth({ authenticated: false })
       setView(null)
+      setShowModal(false)
+      setExcludedPlaylistIds(new Set())
       setPlaylists([])
       setPlaylistArtists([])
       setCompareResult(null)
@@ -336,6 +458,9 @@ export default function App() {
   }
 
   const overlapCount = compareResult ? compareResult.common_count : 0
+  const activePlaylists = playlists.filter((p) => !excludedPlaylistIds.has(p.id))
+  const selectablePlaylists = activePlaylists.length > 0 ? activePlaylists : playlists
+  const draftActiveCount = playlists.filter((p) => !draftExcluded.has(p.id)).length
 
   return (
     <main>
@@ -350,6 +475,14 @@ export default function App() {
           {auth?.authenticated && (
             <>
               <p>USER: {auth.display_name || auth.user_id}</p>
+              <button
+                type="button"
+                className="header-link-btn"
+                onClick={openModal}
+                title="Select which playlists are included in library questions"
+              >
+                [ PLAYLISTS: {activePlaylists.length}/{playlists.length} ]
+              </button>
               <button type="button" className="logout-btn" onClick={handleLogout}>
                 [ DISCONNECT ]
               </button>
@@ -426,9 +559,13 @@ export default function App() {
               <div className="filters">
                 <SelectPlaylist
                   value={playlistA}
-                  onChange={setPlaylistA}
+                  onChange={(val) => {
+                    setPlaylistA(val)
+                    setPlaylistArtists([])
+                    setCompareResult(null)
+                  }}
                   label="PLAYLIST A"
-                  options={playlists}
+                  options={selectablePlaylists}
                   disabled={loading}
                 />
                 {view === 'overlap' && (
@@ -436,12 +573,35 @@ export default function App() {
                     <span className="versus">VS</span>
                     <SelectPlaylist
                       value={playlistB}
-                      onChange={setPlaylistB}
+                      onChange={(val) => {
+                        setPlaylistB(val)
+                        setCompareResult(null)
+                      }}
                       label="PLAYLIST B"
-                      options={playlists}
+                      options={selectablePlaylists}
                       disabled={loading}
                     />
                   </>
+                )}
+                {view === 'playlist' && (
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={() => fetchPlaylistArtists(playlistA)}
+                    disabled={loading || !playlistA}
+                  >
+                    {loading ? '[ ANALYZING... ]' : '[ ANALYZE PLAYLIST ]'}
+                  </button>
+                )}
+                {view === 'overlap' && (
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={() => fetchCompare(playlistA, playlistB)}
+                    disabled={loading || !playlistA || !playlistB || playlistA === playlistB}
+                  >
+                    {loading ? '[ COMPARING... ]' : '[ COMPARE PLAYLISTS ]'}
+                  </button>
                 )}
               </div>
             )}
@@ -471,7 +631,9 @@ export default function App() {
                   ))
                 ) : (
                   <div className="empty">
-                    {playlists.length === 0 ? 'LOADING PLAYLISTS...' : 'NO TRACKS FOUND IN THIS PLAYLIST'}
+                    {playlists.length === 0
+                      ? 'NO PLAYLISTS AVAILABLE'
+                      : 'CHOOSE PLAYLIST ABOVE AND CLICK [ ANALYZE PLAYLIST ]'}
                   </div>
                 )}
               </div>
@@ -512,120 +674,263 @@ export default function App() {
                         </div>
                       </div>
                     ))
-                  ) : (
+                  ) : compareResult ? (
                     <div className="empty">ZERO COMMON SONGS FOUND BETWEEN THESE PLAYLISTS</div>
+                  ) : (
+                    <div className="empty">CHOOSE TWO PLAYLISTS AND CLICK [ COMPARE PLAYLISTS ]</div>
                   )}
                 </div>
               </>
             )}
 
             {view === 'duplicates' && (
-              <div className="ranking">
-                <div className="ranking-head">
-                  <span>RANK / SONG / ARTIST</span>
-                  <span>COPIES</span>
+              <>
+                <div className="query-control-bar">
+                  <span>ANALYSIS TARGET: <strong>{activePlaylists.length}</strong> INCLUDED PLAYLISTS</span>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={fetchDuplicates}
+                    disabled={loading || activePlaylists.length === 0}
+                  >
+                    {loading ? '[ SCANNING LIBRARY... ]' : duplicatesData ? '[ RE-RUN SCAN ]' : '[ START SCANNING DUPLICATES ]'}
+                  </button>
                 </div>
-                {loading && !duplicatesData ? (
-                  <div className="empty">SCANNING REPEATED SONGS ACROSS ALL PLAYLISTS...</div>
-                ) : duplicatesData && duplicatesData.repeated_songs.length > 0 ? (
-                  duplicatesData.repeated_songs.map((song, index) => (
-                    <div className="ranking-row song-row" key={song.id || `${song.name}-${index}`}>
-                      <span className="rank">{String(index + 1).padStart(2, '0')}</span>
-                      <div className="song-row-content">
-                        {song.image_url ? (
-                          <img src={song.image_url} alt="" className="cover-art" loading="lazy" />
-                        ) : (
-                          <div className="cover-placeholder">♪</div>
-                        )}
-                        <div className="song-text">
-                          <strong>{song.name}</strong>
-                          <small>
-                            {song.artist} — [{song.playlists.join(' / ')}]
-                          </small>
+                <div className="ranking">
+                  <div className="ranking-head">
+                    <span>RANK / SONG / ARTIST</span>
+                    <span>COPIES</span>
+                  </div>
+                  {loading && !duplicatesData ? (
+                    <div className="empty">SCANNING REPEATED SONGS ACROSS INCLUDED PLAYLISTS...</div>
+                  ) : duplicatesData && duplicatesData.repeated_songs.length > 0 ? (
+                    duplicatesData.repeated_songs.map((song, index) => (
+                      <div className="ranking-row song-row" key={song.id || `${song.name}-${index}`}>
+                        <span className="rank">{String(index + 1).padStart(2, '0')}</span>
+                        <div className="song-row-content">
+                          {song.image_url ? (
+                            <img src={song.image_url} alt="" className="cover-art" loading="lazy" />
+                          ) : (
+                            <div className="cover-placeholder">♪</div>
+                          )}
+                          <div className="song-text">
+                            <strong>{song.name}</strong>
+                            <small>
+                              {song.artist} — [{song.playlists.join(' / ')}]
+                            </small>
+                          </div>
                         </div>
+                        <span className="metric">{String(song.playlists_count).padStart(2, '0')}</span>
                       </div>
-                      <span className="metric">{String(song.playlists_count).padStart(2, '0')}</span>
+                    ))
+                  ) : duplicatesData ? (
+                    <div className="empty">NO DUPLICATE TRACKS FOUND ACROSS INCLUDED PLAYLISTS</div>
+                  ) : (
+                    <div className="empty">
+                      {activePlaylists.length === 0
+                        ? 'NO PLAYLISTS INCLUDED. CLICK [ PLAYLISTS ] IN THE HEADER TO INCLUDE PLAYLISTS.'
+                        : 'CLICK [ START SCANNING DUPLICATES ] ABOVE TO BEGIN ANALYSIS.'}
                     </div>
-                  ))
-                ) : (
-                  <div className="empty">NO DUPLICATE TRACKS FOUND</div>
-                )}
-              </div>
+                  )}
+                </div>
+              </>
             )}
 
             {view === 'artists' && (
-              <div className="ranking">
-                <div className="ranking-head artist-columns">
-                  <span>RANK / ARTIST</span>
-                  <span>SONGS / PLAYLISTS</span>
+              <>
+                <div className="query-control-bar">
+                  <span>ANALYSIS TARGET: <strong>{activePlaylists.length}</strong> INCLUDED PLAYLISTS</span>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={fetchLibraryArtists}
+                    disabled={loading || activePlaylists.length === 0}
+                  >
+                    {loading ? '[ CALCULATING... ]' : libraryArtists.length > 0 ? '[ RE-CALCULATE ]' : '[ CALCULATE ARTIST DOMINANCE ]'}
+                  </button>
                 </div>
-                {loading && libraryArtists.length === 0 ? (
-                  <div className="empty">CALCULATING ARTIST DOMINANCE ACROSS LIBRARY...</div>
-                ) : libraryArtists.length > 0 ? (
-                  libraryArtists.map((item, index) => (
-                    <div className="ranking-row" key={`${item.artist}-${index}`}>
-                      <span className="rank">{String(index + 1).padStart(2, '0')}</span>
-                      <div className="artist-row-content">
-                        {item.image_url ? (
-                          <img src={item.image_url} alt="" className="artist-avatar" loading="lazy" />
-                        ) : (
-                          <div className="artist-avatar-placeholder">★</div>
-                        )}
-                        <strong>{item.artist}</strong>
+                <div className="ranking">
+                  <div className="ranking-head artist-columns">
+                    <span>RANK / ARTIST</span>
+                    <span>SONGS / PLAYLISTS</span>
+                  </div>
+                  {loading && libraryArtists.length === 0 ? (
+                    <div className="empty">CALCULATING ARTIST DOMINANCE ACROSS LIBRARY...</div>
+                  ) : libraryArtists.length > 0 ? (
+                    libraryArtists.map((item, index) => (
+                      <div className="ranking-row" key={`${item.artist}-${index}`}>
+                        <span className="rank">{String(index + 1).padStart(2, '0')}</span>
+                        <div className="artist-row-content">
+                          {item.image_url ? (
+                            <img src={item.image_url} alt="" className="artist-avatar" loading="lazy" />
+                          ) : (
+                            <div className="artist-avatar-placeholder">★</div>
+                          )}
+                          <strong>{item.artist}</strong>
+                        </div>
+                        <span className="metric split-metric">
+                          {item.songs_count}
+                          <small>{item.playlists_count} PLAYLISTS</small>
+                        </span>
                       </div>
-                      <span className="metric split-metric">
-                        {item.songs_count}
-                        <small>{item.playlists_count} PLAYLISTS</small>
-                      </span>
+                    ))
+                  ) : (
+                    <div className="empty">
+                      {activePlaylists.length === 0
+                        ? 'NO PLAYLISTS INCLUDED. CLICK [ PLAYLISTS ] IN THE HEADER TO INCLUDE PLAYLISTS.'
+                        : 'CLICK [ CALCULATE ARTIST DOMINANCE ] ABOVE TO BEGIN ANALYSIS.'}
                     </div>
-                  ))
-                ) : (
-                  <div className="empty">NO ARTISTS FOUND</div>
-                )}
-              </div>
+                  )}
+                </div>
+              </>
             )}
 
             {view === 'albums' && (
-              <div className="ranking">
-                <div className="ranking-head artist-columns">
-                  <span>RANK / ALBUM / ARTIST</span>
-                  <span>TRACKS / PLAYLISTS</span>
+              <>
+                <div className="query-control-bar">
+                  <span>ANALYSIS TARGET: <strong>{activePlaylists.length}</strong> INCLUDED PLAYLISTS</span>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={fetchLibraryAlbums}
+                    disabled={loading || activePlaylists.length === 0}
+                  >
+                    {loading ? '[ CALCULATING... ]' : libraryAlbums.length > 0 ? '[ RE-CALCULATE ]' : '[ CALCULATE ALBUM DOMINANCE ]'}
+                  </button>
                 </div>
-                {loading && libraryAlbums.length === 0 ? (
-                  <div className="empty">CALCULATING ALBUM DOMINANCE ACROSS PLAYLISTS...</div>
-                ) : libraryAlbums.length > 0 ? (
-                  libraryAlbums.map((item, index) => (
-                    <div className="ranking-row song-row" key={item.id || `${item.album}-${index}`}>
-                      <span className="rank">{String(index + 1).padStart(2, '0')}</span>
-                      <div className="song-row-content">
-                        {item.image_url ? (
-                          <img src={item.image_url} alt="" className="cover-art" loading="lazy" />
-                        ) : (
-                          <div className="cover-placeholder">◎</div>
-                        )}
-                        <div className="song-text">
-                          <strong>{item.album}</strong>
-                          <small>
-                            {item.artist}
-                            {item.playlists && item.playlists.length > 0
-                              ? ` — [${item.playlists.join(' / ')}]`
-                              : ''}
-                          </small>
+                <div className="ranking">
+                  <div className="ranking-head artist-columns">
+                    <span>RANK / ALBUM / ARTIST</span>
+                    <span>TRACKS / PLAYLISTS</span>
+                  </div>
+                  {loading && libraryAlbums.length === 0 ? (
+                    <div className="empty">CALCULATING ALBUM DOMINANCE ACROSS PLAYLISTS...</div>
+                  ) : libraryAlbums.length > 0 ? (
+                    libraryAlbums.map((item, index) => (
+                      <div className="ranking-row song-row" key={item.id || `${item.album}-${index}`}>
+                        <span className="rank">{String(index + 1).padStart(2, '0')}</span>
+                        <div className="song-row-content">
+                          {item.image_url ? (
+                            <img src={item.image_url} alt="" className="cover-art" loading="lazy" />
+                          ) : (
+                            <div className="cover-placeholder">◎</div>
+                          )}
+                          <div className="song-text">
+                            <strong>{item.album}</strong>
+                            <small>
+                              {item.artist}
+                              {item.playlists && item.playlists.length > 0
+                                ? ` — [${item.playlists.join(' / ')}]`
+                                : ''}
+                            </small>
+                          </div>
                         </div>
+                        <span className="metric split-metric">
+                          {item.songs_count}
+                          <small>{item.playlists_count} PLAYLISTS</small>
+                        </span>
                       </div>
-                      <span className="metric split-metric">
-                        {item.songs_count}
-                        <small>{item.playlists_count} PLAYLISTS</small>
-                      </span>
+                    ))
+                  ) : (
+                    <div className="empty">
+                      {activePlaylists.length === 0
+                        ? 'NO PLAYLISTS INCLUDED. CLICK [ PLAYLISTS ] IN THE HEADER TO INCLUDE PLAYLISTS.'
+                        : 'CLICK [ CALCULATE ALBUM DOMINANCE ] ABOVE TO BEGIN ANALYSIS.'}
                     </div>
-                  ))
-                ) : (
-                  <div className="empty">NO ALBUMS FOUND</div>
-                )}
-              </div>
+                  )}
+                </div>
+              </>
             )}
           </section>
         )}
+
+      {showModal && (
+        <div className="modal-overlay" onClick={() => setShowModal(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h2>SELECT PLAYLISTS</h2>
+                <p>CHOOSE WHICH PLAYLISTS ARE ANALYZED IN ALL QUESTIONS</p>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setShowModal(false)}
+              >
+                [ ✕ CANCEL ]
+              </button>
+            </div>
+
+            <div className="modal-actions">
+              <div className="modal-stats">
+                INCLUDED: <strong>{draftActiveCount}</strong> / {playlists.length}
+              </div>
+              <div className="modal-action-buttons">
+                <button type="button" onClick={selectAllDraft}>
+                  [ SELECT ALL ]
+                </button>
+                <button type="button" onClick={deselectAllDraft}>
+                  [ DESELECT ALL ]
+                </button>
+              </div>
+            </div>
+
+            <div className="modal-search">
+              <input
+                type="text"
+                placeholder="SEARCH PLAYLIST BY NAME..."
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+              />
+            </div>
+
+            <div className="modal-list">
+              {playlists
+                .filter((p) => p.name.toLowerCase().includes(searchFilter.toLowerCase()))
+                .map((playlist) => {
+                  const isIncluded = !draftExcluded.has(playlist.id)
+                  return (
+                    <div
+                      key={playlist.id}
+                      className={`modal-playlist-item ${isIncluded ? 'is-included' : 'is-excluded'}`}
+                      onClick={() => toggleDraftExclusion(playlist.id)}
+                    >
+                      <div className="modal-item-cover">
+                        {playlist.image_url ? (
+                          <img src={playlist.image_url} alt="" loading="lazy" />
+                        ) : (
+                          <div className="modal-cover-placeholder">≡</div>
+                        )}
+                      </div>
+                      <span className="modal-item-name">{playlist.name}</span>
+                      <span className={`modal-item-status ${isIncluded ? 'status-included' : 'status-excluded'}`}>
+                        {isIncluded ? '[ INCLUDED ]' : '[ EXCLUDED ]'}
+                      </span>
+                    </div>
+                  )
+                })}
+              {playlists.filter((p) => p.name.toLowerCase().includes(searchFilter.toLowerCase())).length === 0 && (
+                <div className="empty">
+                  {playlists.length === 0
+                    ? 'NO PLAYLISTS LOADED (SPOTIFY RATE LIMIT OR NO PLAYLISTS FOUND)'
+                    : 'NO PLAYLISTS MATCH YOUR SEARCH'}
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <small>SAVED PERMANENTLY IN USER COOKIES AND LOCAL STORAGE</small>
+              <button
+                type="button"
+                className="modal-apply-btn"
+                onClick={handleSaveAndApply}
+              >
+                [ SAVE & APPLY ]
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer>
         <span className="footer-copyright">

@@ -1,38 +1,36 @@
 from collections import defaultdict
 import spotipy
-from src.utils.spotify import get_spotify_client, get_user_playlists, fetch_artists_images
+from src.utils.spotify import get_spotify_client, get_user_playlists, fetch_artists_images, get_playlist_raw_items
 
 
 def get_playlist_artists_count(
     playlist_id: str,
     sp: spotipy.Spotify | None = None,
 ) -> list[dict[str, int | str | None]]:
-    """Count songs per artist in a specific playlist, including artist profile pictures."""
+    """Count songs per artist in a specific playlist using cached raw items."""
     sp = sp or get_spotify_client()
     artist_count = defaultdict(int)
     artist_ids_map = {}
-    results = sp.playlist_tracks(playlist_id)
+    raw_items = get_playlist_raw_items(playlist_id, sp=sp)
 
-    while results:
-        for entry in (results.get("items") or []):
-            track = entry.get("track") or entry.get("item")
-            if not track or not track.get("id"):
-                continue
-            if track.get("type") == "episode":
-                continue
-            for artist in track.get("artists", []):
-                artist_name = artist.get("name")
-                artist_id = artist.get("id")
-                if artist_name:
-                    artist_count[artist_name] += 1
-                    if artist_id and artist_name not in artist_ids_map:
-                        artist_ids_map[artist_name] = artist_id
-        results = sp.next(results) if results.get("next") else None
+    for entry in raw_items:
+        track = entry.get("track") or entry.get("item")
+        if not track or not track.get("id"):
+            continue
+        if track.get("type") == "episode":
+            continue
+        for artist in track.get("artists", []):
+            artist_name = artist.get("name")
+            artist_id = artist.get("id")
+            if artist_name:
+                artist_count[artist_name] += 1
+                if artist_id and artist_name not in artist_ids_map:
+                    artist_ids_map[artist_name] = artist_id
 
     sorted_artists = sorted(artist_count.items(), key=lambda x: (-x[1], x[0]))
 
     top_artist_ids = [
-        artist_ids_map[name] for name, _ in sorted_artists[:50] if name in artist_ids_map
+        artist_ids_map[name] for name, _ in sorted_artists[:20] if name in artist_ids_map
     ]
     images_map = fetch_artists_images(top_artist_ids, sp)
 

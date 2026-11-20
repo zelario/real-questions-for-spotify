@@ -8,8 +8,42 @@ from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheFileHandler, MemoryCacheHandler
 
 _ARTIST_IMAGE_CACHE: dict[str, str | None] = {}
+_USER_PLAYLISTS_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_PLAYLIST_RAW_ITEMS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 SESSIONS_DIR = Path(__file__).resolve().parent.parent.parent / ".sessions"
 SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_playlist_raw_items(
+    playlist_id: str,
+    sp: spotipy.Spotify | None = None,
+    max_age_seconds: int = 1800,
+) -> list[dict]:
+    """Fetch and cache raw playlist track items for 30 minutes to drastically minimize Spotify API requests."""
+    import time
+    sp = sp or get_spotify_client()
+    now = time.time()
+
+    if playlist_id in _PLAYLIST_RAW_ITEMS_CACHE:
+        ts, cached = _PLAYLIST_RAW_ITEMS_CACHE[playlist_id]
+        if now - ts < max_age_seconds:
+            return cached
+
+    items = []
+    try:
+        results = sp.playlist_tracks(playlist_id)
+        while results:
+            for entry in (results.get("items") or []):
+                if entry:
+                    items.append(entry)
+            results = sp.next(results) if results.get("next") else None
+        _PLAYLIST_RAW_ITEMS_CACHE[playlist_id] = (now, items)
+    except Exception as exc:
+        if playlist_id in _PLAYLIST_RAW_ITEMS_CACHE:
+            return _PLAYLIST_RAW_ITEMS_CACHE[playlist_id][1]
+        raise exc
+
+    return items
 
 
 def sanitize_session_id(session_id: str | None) -> str | None:
@@ -38,7 +72,11 @@ def get_spotify_oauth(session_id: str | None = None) -> SpotifyOAuth:
 
 def get_spotify_client(session_id: str | None = None) -> spotipy.Spotify:
     oauth = get_spotify_oauth(session_id)
-    return spotipy.Spotify(auth_manager=oauth)
+    return spotipy.Spotify(
+        auth_manager=oauth,
+        retries=0,
+        requests_timeout=10,
+    )
 
 
 def login(sp: spotipy.Spotify | None = None) -> dict:
@@ -50,26 +88,56 @@ def login(sp: spotipy.Spotify | None = None) -> dict:
 def get_user_playlists(
     sp: spotipy.Spotify | None = None,
     excluded: set[str] | None = None,
+    excluded_ids: set[str] | None = None,
+    force_refresh: bool = False,
 ) -> list[dict]:
-    """Fetch all user playlists, including cover image URLs."""
+    """Fetch all user playlists, filtering by excluded names or IDs, with 10-minute in-memory caching."""
+    import time
     sp = sp or get_spotify_client()
     excluded = excluded or set()
-    playlists = []
-    results = sp.current_user_playlists()
+    excluded_ids = excluded_ids or set()
 
-    while results:
-        for playlist in results.get("items", []):
-            if playlist["name"] not in excluded:
-                imgs = playlist.get("images") or []
-                img_url = imgs[0]["url"] if imgs else None
-                playlists.append({
-                    "id": playlist["id"],
-                    "name": playlist["name"],
-                    "image_url": img_url,
-                })
-        results = sp.next(results) if results.get("next") else None
+    # Use cache path of auth manager or fallback string as unique user key
+    cache_key = "default"
+    auth_mgr = getattr(sp, "auth_manager", None)
+    if auth_mgr and hasattr(auth_mgr, "cache_path"):
+        cache_key = str(auth_mgr.cache_path)
 
-    return playlists
+    now = time.time()
+    raw_playlists = None
+
+    if not force_refresh and cache_key in _USER_PLAYLISTS_CACHE:
+        ts, cached_items = _USER_PLAYLISTS_CACHE[cache_key]
+        if now - ts < 600:
+            raw_playlists = cached_items
+
+    if raw_playlists is None:
+        raw_playlists = []
+        try:
+            results = sp.current_user_playlists()
+            while results:
+                for playlist in results.get("items", []):
+                    if not playlist or not playlist.get("id"):
+                        continue
+                    imgs = playlist.get("images") or []
+                    img_url = imgs[0]["url"] if imgs else None
+                    raw_playlists.append({
+                        "id": playlist["id"],
+                        "name": playlist.get("name", ""),
+                        "image_url": img_url,
+                    })
+                results = sp.next(results) if results.get("next") else None
+            _USER_PLAYLISTS_CACHE[cache_key] = (now, raw_playlists)
+        except Exception as exc:
+            if cache_key in _USER_PLAYLISTS_CACHE:
+                raw_playlists = _USER_PLAYLISTS_CACHE[cache_key][1]
+            else:
+                raise exc
+
+    return [
+        p for p in raw_playlists
+        if p["id"] not in excluded_ids and p["name"] not in excluded
+    ]
 
 
 def extract_track_info(entry: dict) -> tuple[str, str, str, str | None, str | None] | None:
@@ -97,9 +165,8 @@ def extract_track_info(entry: dict) -> tuple[str, str, str, str | None, str | No
 
 def fetch_artists_images(artist_ids: list[str], sp: spotipy.Spotify | None = None) -> dict[str, str | None]:
     """
-    Fetch profile images for a list of artist IDs using individual artist requests concurrently.
-    This avoids Spotify's 403 Forbidden error on the batch /v1/artists endpoint.
-    Results are cached in-memory for instant reuse.
+    Fetch profile images for top artist IDs gently without rate-limiting.
+    Limits to top 10 artists and caches in-memory for instant reuse.
     """
     sp = sp or get_spotify_client()
     valid_ids = [aid for aid in set(artist_ids) if aid]
@@ -115,11 +182,10 @@ def fetch_artists_images(artist_ids: list[str], sp: spotipy.Spotify | None = Non
             return aid, None
 
     if needed_ids:
-        ids_to_fetch = needed_ids[:35]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            results = executor.map(fetch_single, ids_to_fetch)
-            for aid, url in results:
-                _ARTIST_IMAGE_CACHE[aid] = url
+        ids_to_fetch = needed_ids[:10]
+        for aid in ids_to_fetch:
+            aid, url = fetch_single(aid)
+            _ARTIST_IMAGE_CACHE[aid] = url
 
     return {aid: _ARTIST_IMAGE_CACHE.get(aid) for aid in valid_ids}
 
@@ -129,12 +195,9 @@ def collect_tracks_across_playlists(
     sp: spotipy.Spotify | None = None,
 ) -> tuple[dict[str, set[str]], dict[str, tuple[str, str, str | None]], dict[str, str]]:
     """
-    Collect tracks from multiple playlists.
+    Collect tracks from multiple playlists using cached raw items to minimize Spotify API load.
     Returns:
         (track_playlists, track_meta, artist_ids_map)
-        where track_playlists maps track_id -> set of playlist_names,
-        track_meta maps track_id -> (track_name, primary_artist_name, image_url),
-        and artist_ids_map maps artist_name -> artist_id.
     """
     sp = sp or get_spotify_client()
     track_playlists: dict[str, set[str]] = {}
@@ -146,23 +209,22 @@ def collect_tracks_across_playlists(
         playlist_id = playlist["id"]
         seen_in_playlist = set()
 
-        results = sp.playlist_tracks(playlist_id)
-        while results:
-            for entry in (results.get("items") or []):
-                parsed = extract_track_info(entry)
-                if not parsed:
-                    continue
+        raw_items = get_playlist_raw_items(playlist_id, sp=sp)
+        for entry in raw_items:
+            parsed = extract_track_info(entry)
+            if not parsed:
+                continue
 
-                track_id, track_name, artist_name, artist_id, image_url = parsed
-                if track_id in seen_in_playlist:
-                    continue
-                seen_in_playlist.add(track_id)
+            track_id, track_name, artist_name, artist_id, image_url = parsed
+            if track_id in seen_in_playlist:
+                continue
+            seen_in_playlist.add(track_id)
 
-                track_playlists.setdefault(track_id, set()).add(playlist_name)
-                track_meta[track_id] = (track_name, artist_name, image_url)
-                if artist_id and artist_name not in artist_ids_map:
-                    artist_ids_map[artist_name] = artist_id
+            track_playlists.setdefault(track_id, set()).add(playlist_name)
+            track_meta[track_id] = (track_name, artist_name, image_url)
+            if artist_id and artist_name not in artist_ids_map:
+                artist_ids_map[artist_name] = artist_id
 
-            results = sp.next(results) if results.get("next") else None
+    return track_playlists, track_meta, artist_ids_map
 
     return track_playlists, track_meta, artist_ids_map

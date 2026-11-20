@@ -48,11 +48,13 @@ def get_repeated_songs(
 
 def find_repeated_songs(
     sp: spotipy.Spotify | None = None,
-    excluded: set[str] = DEFAULT_EXCLUDED_PLAYLISTS,
+    excluded: set[str] | None = None,
+    excluded_ids: set[str] | None = None,
     limit: int | None = 50,
 ) -> dict:
     """Orchestrate fetching and analyzing repeated songs across user playlists."""
     sp = sp or get_spotify_client()
-    playlists = get_user_playlists(sp, excluded=excluded)
+    exc = excluded if excluded is not None else DEFAULT_EXCLUDED_PLAYLISTS
+    playlists = get_user_playlists(sp, excluded=exc, excluded_ids=excluded_ids)
     track_playlists, track_meta, _ = collect_tracks_across_playlists(playlists, sp)
     return get_repeated_songs(track_playlists, track_meta, limit=limit)

@@ -1,26 +1,24 @@
 import spotipy
 from src.utils.constants import DEFAULT_EXCLUDED_PLAYLISTS
-from src.utils.spotify import get_spotify_client, get_user_playlists, extract_track_info
+from src.utils.spotify import get_spotify_client, get_user_playlists, extract_track_info, get_playlist_raw_items
 
 
 def get_playlist_tracks(playlist_id: str, sp: spotipy.Spotify | None = None) -> dict[str, dict[str, str | None]]:
-    """Fetch all tracks for a playlist, returning a dictionary mapping track_id -> {'name': str, 'artist': str, 'image_url': str | None}."""
+    """Fetch all tracks for a playlist using cached items to avoid redundant requests."""
     sp = sp or get_spotify_client()
     tracks = {}
-    results = sp.playlist_tracks(playlist_id)
+    raw_items = get_playlist_raw_items(playlist_id, sp=sp)
 
-    while results:
-        for entry in (results.get("items") or []):
-            parsed = extract_track_info(entry)
-            if not parsed:
-                continue
-            track_id, track_name, artist_name, artist_id, image_url = parsed
-            tracks[track_id] = {
-                "name": track_name,
-                "artist": artist_name,
-                "image_url": image_url,
-            }
-        results = sp.next(results) if results.get("next") else None
+    for entry in raw_items:
+        parsed = extract_track_info(entry)
+        if not parsed:
+            continue
+        track_id, track_name, artist_name, artist_id, image_url = parsed
+        tracks[track_id] = {
+            "name": track_name,
+            "artist": artist_name,
+            "image_url": image_url,
+        }
 
     return tracks
 

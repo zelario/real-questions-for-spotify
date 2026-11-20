@@ -53,6 +53,32 @@ def get_user_sp(request: Request) -> spotipy.Spotify:
     return sp
 
 
+def parse_excluded_ids(request: Request, query_excluded: str | None = None, user_id: str | None = None) -> set[str]:
+    """Parse excluded playlist IDs from query param or user-scoped session cookies."""
+    if query_excluded:
+        return {x.strip() for x in query_excluded.split(",") if x.strip()}
+
+    cookie_keys = []
+    if user_id:
+        cookie_keys.append(f"rq_excluded_{user_id}")
+    cookie_keys.append("rq_excluded_playlists")
+
+    for key in cookie_keys:
+        raw = request.cookies.get(key)
+        if raw:
+            try:
+                import json
+                decoded = urllib.parse.unquote(raw)
+                if decoded.startswith("[") and decoded.endswith("]"):
+                    parsed = json.loads(decoded)
+                    if isinstance(parsed, list):
+                        return {str(x).strip() for x in parsed if str(x).strip()}
+                return {x.strip() for x in decoded.split(",") if x.strip()}
+            except Exception:
+                continue
+    return set()
+
+
 def get_frontend_redirect() -> str:
     """Return redirect target after OAuth: '/' for Docker/production, else dev Vite server."""
     custom = os.getenv("FRONTEND_URL")
@@ -234,18 +260,57 @@ def auth_logout(request: Request):
 
 @app.get("/api/playlists")
 def list_playlists(request: Request):
-    """List all playlists from the user's Spotify account."""
+    """List all playlists from the user's Spotify account, along with user-scoped saved exclusions."""
     try:
         sp = get_user_sp(request)
         playlists = get_user_playlists(sp=sp)
-        return {"playlists": playlists}
+        user_id = None
+        try:
+            user_id = sp.current_user().get("id")
+        except Exception:
+            pass
+        saved_excluded = list(parse_excluded_ids(request, user_id=user_id))
+        return {"playlists": playlists, "saved_excluded_ids": saved_excluded}
     except HTTPException:
         raise
     except Exception as exc:
+        err_str = str(exc)
+        if "429" in err_str or "rate" in err_str.lower():
+            raise HTTPException(
+                status_code=429,
+                detail="Spotify API Rate Limit reached (HTTP 429). The Spotify App client credentials reached their limit.",
+            )
         raise HTTPException(
-            status_code=401 if "token" in str(exc).lower() or "auth" in str(exc).lower() else 500,
-            detail=str(exc),
+            status_code=401 if "token" in err_str.lower() or "auth" in err_str.lower() else 500,
+            detail=err_str,
         )
+
+
+@app.post("/api/user/excluded-playlists")
+async def save_excluded_playlists(request: Request):
+    """Persist user-scoped excluded playlist IDs in long-lived cookies (1 year)."""
+    try:
+        body = await request.json()
+        excluded_list = body.get("excluded_ids", [])
+        sp = get_user_sp(request)
+        user_id = sp.current_user().get("id")
+        import json
+        cookie_val = json.dumps(excluded_list)
+        response = JSONResponse({"status": "saved", "excluded_count": len(excluded_list), "user_id": user_id})
+        cookie_kwargs = {
+            "max_age": 365 * 24 * 3600,
+            "path": "/",
+            "httponly": False,
+            "samesite": "lax",
+        }
+        if user_id:
+            response.set_cookie(key=f"rq_excluded_{user_id}", value=cookie_val, **cookie_kwargs)
+        response.set_cookie(key="rq_excluded_playlists", value=cookie_val, **cookie_kwargs)
+        return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/playlists/{playlist_id}/artists")
@@ -279,12 +344,22 @@ def compare_two_playlists(
 
 
 @app.get("/api/repeated-artists")
-def repeated_artists(request: Request, limit: int = Query(30, ge=1, le=100)):
-    """Return top repeated artists across all playlists."""
+def repeated_artists(
+    request: Request,
+    limit: int = Query(30, ge=1, le=100),
+    excluded_ids: str | None = Query(None, description="Comma-separated playlist IDs to exclude"),
+):
+    """Return top repeated artists across all included playlists."""
     try:
         sp = get_user_sp(request)
-        artists = find_repeated_artists(sp=sp, limit=limit)
-        return {"limit": limit, "artists": artists}
+        user_id = None
+        try:
+            user_id = sp.current_user().get("id")
+        except Exception:
+            pass
+        excluded = parse_excluded_ids(request, query_excluded=excluded_ids, user_id=user_id)
+        artists = find_repeated_artists(sp=sp, excluded_ids=excluded, limit=limit)
+        return {"limit": limit, "artists": artists, "excluded_count": len(excluded)}
     except HTTPException:
         raise
     except Exception as exc:
@@ -292,11 +367,21 @@ def repeated_artists(request: Request, limit: int = Query(30, ge=1, le=100)):
 
 
 @app.get("/api/repeated-songs")
-def repeated_songs(request: Request, limit: int = Query(50, ge=1, le=200)):
-    """Return duplicate songs across all playlists."""
+def repeated_songs(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    excluded_ids: str | None = Query(None, description="Comma-separated playlist IDs to exclude"),
+):
+    """Return duplicate songs across all included playlists."""
     try:
         sp = get_user_sp(request)
-        data = find_repeated_songs(sp=sp, limit=limit)
+        user_id = None
+        try:
+            user_id = sp.current_user().get("id")
+        except Exception:
+            pass
+        excluded = parse_excluded_ids(request, query_excluded=excluded_ids, user_id=user_id)
+        data = find_repeated_songs(sp=sp, excluded_ids=excluded, limit=limit)
         return data
     except HTTPException:
         raise
@@ -305,12 +390,22 @@ def repeated_songs(request: Request, limit: int = Query(50, ge=1, le=200)):
 
 
 @app.get("/api/repeated-albums")
-def repeated_albums(request: Request, limit: int = Query(50, ge=1, le=200)):
-    """Return albums with the most songs/appearances across all playlists."""
+def repeated_albums(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    excluded_ids: str | None = Query(None, description="Comma-separated playlist IDs to exclude"),
+):
+    """Return albums with the most songs/appearances across all included playlists."""
     try:
         sp = get_user_sp(request)
-        albums = find_repeated_albums(sp=sp, limit=limit)
-        return {"limit": limit, "albums": albums}
+        user_id = None
+        try:
+            user_id = sp.current_user().get("id")
+        except Exception:
+            pass
+        excluded = parse_excluded_ids(request, query_excluded=excluded_ids, user_id=user_id)
+        albums = find_repeated_albums(sp=sp, excluded_ids=excluded, limit=limit)
+        return {"limit": limit, "albums": albums, "excluded_count": len(excluded)}
     except HTTPException:
         raise
     except Exception as exc:

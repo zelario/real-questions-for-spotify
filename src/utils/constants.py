@@ -1,7 +1,1 @@
-DEFAULT_EXCLUDED_PLAYLISTS = {
-    "neste momento",
-    "veremos",
-    "devilgames",
-    "funk",
-}
-
+DEFAULT_EXCLUDED_PLAYLISTS: set[str] = set()

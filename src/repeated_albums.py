@@ -1,7 +1,7 @@
 from collections import defaultdict
 import spotipy
 from src.utils.constants import DEFAULT_EXCLUDED_PLAYLISTS
-from src.utils.spotify import get_spotify_client, get_user_playlists
+from src.utils.spotify import get_spotify_client, get_user_playlists, get_playlist_raw_items
 
 
 def extract_album_track_info(entry: dict) -> tuple[str, str, str, str, str, str | None] | None:
@@ -51,37 +51,34 @@ def calculate_album_statistics(
         playlist_id = playlist["id"]
         seen_in_playlist: set[str] = set()
 
-        results = sp.playlist_tracks(playlist_id)
-        while results:
-            for entry in (results.get("items") or []):
-                parsed = extract_album_track_info(entry)
-                if not parsed:
-                    continue
+        raw_items = get_playlist_raw_items(playlist_id, sp=sp)
+        for entry in raw_items:
+            parsed = extract_album_track_info(entry)
+            if not parsed:
+                continue
 
-                track_id, track_name, album_id, album_name, artist_name, image_url = parsed
-                if track_id in seen_in_playlist:
-                    continue
-                seen_in_playlist.add(track_id)
+            track_id, track_name, album_id, album_name, artist_name, image_url = parsed
+            if track_id in seen_in_playlist:
+                continue
+            seen_in_playlist.add(track_id)
 
-                if album_id not in album_records:
-                    album_records[album_id] = {
-                        "id": album_id,
-                        "album": album_name,
-                        "artist": artist_name,
-                        "image_url": image_url,
-                        "tracks": set(),
-                        "playlists": set(),
-                        "songs_count": 0,
-                    }
+            if album_id not in album_records:
+                album_records[album_id] = {
+                    "id": album_id,
+                    "album": album_name,
+                    "artist": artist_name,
+                    "image_url": image_url,
+                    "tracks": set(),
+                    "playlists": set(),
+                    "songs_count": 0,
+                }
 
-                record = album_records[album_id]
-                record["songs_count"] += 1
-                record["tracks"].add(track_id)
-                record["playlists"].add(playlist_name)
-                if not record["image_url"] and image_url:
-                    record["image_url"] = image_url
-
-            results = sp.next(results) if results.get("next") else None
+            record = album_records[album_id]
+            record["songs_count"] += 1
+            record["tracks"].add(track_id)
+            record["playlists"].add(playlist_name)
+            if not record["image_url"] and image_url:
+                record["image_url"] = image_url
 
     stats = [
         {
@@ -104,10 +101,12 @@ def calculate_album_statistics(
 
 def find_repeated_albums(
     sp: spotipy.Spotify | None = None,
-    excluded: set[str] = DEFAULT_EXCLUDED_PLAYLISTS,
+    excluded: set[str] | None = None,
+    excluded_ids: set[str] | None = None,
     limit: int | None = 50,
 ) -> list[dict[str, str | int | list[str] | None]]:
     """Fetch user playlists and calculate top albums with the most songs in playlists."""
     sp = sp or get_spotify_client()
-    playlists = get_user_playlists(sp, excluded=excluded)
+    exc = excluded if excluded is not None else DEFAULT_EXCLUDED_PLAYLISTS
+    playlists = get_user_playlists(sp, excluded=exc, excluded_ids=excluded_ids)
     return calculate_album_statistics(playlists, sp=sp, limit=limit)

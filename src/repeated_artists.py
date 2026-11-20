@@ -56,11 +56,13 @@ def calculate_artist_statistics(
 
 def find_repeated_artists(
     sp: spotipy.Spotify | None = None,
-    excluded: set[str] = DEFAULT_EXCLUDED_PLAYLISTS,
+    excluded: set[str] | None = None,
+    excluded_ids: set[str] | None = None,
     limit: int | None = 30,
 ) -> list[dict[str, str | int | None]]:
     """Calculate and return top repeated artists across user playlists with images."""
     sp = sp or get_spotify_client()
-    playlists = get_user_playlists(sp, excluded=excluded)
+    exc = excluded if excluded is not None else DEFAULT_EXCLUDED_PLAYLISTS
+    playlists = get_user_playlists(sp, excluded=exc, excluded_ids=excluded_ids)
     track_playlists, track_meta, artist_ids_map = collect_tracks_across_playlists(playlists, sp)
     return calculate_artist_statistics(track_playlists, track_meta, artist_ids_map, sp=sp, limit=limit)
