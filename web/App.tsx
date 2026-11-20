@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 
-type View = 'playlist' | 'overlap' | 'duplicates' | 'artists'
+type View = 'playlist' | 'overlap' | 'duplicates' | 'artists' | 'albums'
 
 interface PlaylistItem {
   id: string
@@ -48,6 +48,17 @@ interface LibraryArtist {
   image_url?: string | null
 }
 
+interface LibraryAlbum {
+  id?: string
+  album: string
+  artist: string
+  songs_count: number
+  unique_songs_count: number
+  playlists_count: number
+  image_url?: string | null
+  playlists?: string[]
+}
+
 interface AuthStatus {
   authenticated: boolean
   user_id?: string
@@ -81,6 +92,11 @@ const questions: { id: View; label: string; note: string }[] = [
     id: 'artists',
     label: 'WHO DOMINATES MY LIBRARY?',
     note: 'ARTISTS ORDERED ACROSS ALL PLAYLISTS',
+  },
+  {
+    id: 'albums',
+    label: 'WHICH ALBUMS DOMINATE MY PLAYLISTS?',
+    note: 'ALBUMS ORDERED BY NUMBER OF TRACKS',
   },
 ]
 
@@ -155,6 +171,7 @@ export default function App() {
   const [compareResult, setCompareResult] = useState<CompareResponse | null>(null)
   const [duplicatesData, setDuplicatesData] = useState<DuplicatesResponse | null>(null)
   const [libraryArtists, setLibraryArtists] = useState<LibraryArtist[]>([])
+  const [libraryAlbums, setLibraryAlbums] = useState<LibraryAlbum[]>([])
 
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
@@ -267,6 +284,23 @@ export default function App() {
     }
   }, [libraryArtists.length])
 
+  // 6. Fetch Dominant Albums
+  const fetchLibraryAlbums = useCallback(async () => {
+    if (libraryAlbums.length > 0) return
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await apiFetch(`${API_BASE}/api/repeated-albums?limit=50`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch library albums`)
+      const data = await res.json()
+      setLibraryAlbums(data.albums || [])
+    } catch (err: any) {
+      setError(err.message || 'Failed to load library albums')
+    } finally {
+      setLoading(false)
+    }
+  }, [libraryAlbums.length])
+
   // Trigger relevant API call when view or playlist selection changes
   useEffect(() => {
     if (!auth?.authenticated) return
@@ -278,8 +312,10 @@ export default function App() {
       fetchDuplicates()
     } else if (view === 'artists') {
       fetchLibraryArtists()
+    } else if (view === 'albums') {
+      fetchLibraryAlbums()
     }
-  }, [auth?.authenticated, view, playlistA, playlistB, fetchPlaylistArtists, fetchCompare, fetchDuplicates, fetchLibraryArtists])
+  }, [auth?.authenticated, view, playlistA, playlistB, fetchPlaylistArtists, fetchCompare, fetchDuplicates, fetchLibraryArtists, fetchLibraryAlbums])
 
   async function handleLogout() {
     try {
@@ -292,6 +328,7 @@ export default function App() {
       setCompareResult(null)
       setDuplicatesData(null)
       setLibraryArtists([])
+      setLibraryAlbums([])
     } catch {
       localStorage.removeItem('rq_session_id')
       setAuth({ authenticated: false })
@@ -544,6 +581,46 @@ export default function App() {
                   ))
                 ) : (
                   <div className="empty">NO ARTISTS FOUND</div>
+                )}
+              </div>
+            )}
+
+            {view === 'albums' && (
+              <div className="ranking">
+                <div className="ranking-head artist-columns">
+                  <span>RANK / ALBUM / ARTIST</span>
+                  <span>TRACKS / PLAYLISTS</span>
+                </div>
+                {loading && libraryAlbums.length === 0 ? (
+                  <div className="empty">CALCULATING ALBUM DOMINANCE ACROSS PLAYLISTS...</div>
+                ) : libraryAlbums.length > 0 ? (
+                  libraryAlbums.map((item, index) => (
+                    <div className="ranking-row song-row" key={item.id || `${item.album}-${index}`}>
+                      <span className="rank">{String(index + 1).padStart(2, '0')}</span>
+                      <div className="song-row-content">
+                        {item.image_url ? (
+                          <img src={item.image_url} alt="" className="cover-art" loading="lazy" />
+                        ) : (
+                          <div className="cover-placeholder">◎</div>
+                        )}
+                        <div className="song-text">
+                          <strong>{item.album}</strong>
+                          <small>
+                            {item.artist}
+                            {item.playlists && item.playlists.length > 0
+                              ? ` — [${item.playlists.join(' / ')}]`
+                              : ''}
+                          </small>
+                        </div>
+                      </div>
+                      <span className="metric split-metric">
+                        {item.songs_count}
+                        <small>{item.playlists_count} PLAYLISTS</small>
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="empty">NO ALBUMS FOUND</div>
                 )}
               </div>
             )}

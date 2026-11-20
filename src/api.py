@@ -26,6 +26,7 @@ from src.analyse_playlist import get_user_playlists, analyze_playlist_by_id
 from src.compare_playlists import compare_playlists_by_id
 from src.repeated_artists import find_repeated_artists
 from src.repeated_songs import find_repeated_songs
+from src.repeated_albums import find_repeated_albums
 
 SESSION_COOKIE_NAME = "rq_session_id"
 
@@ -262,9 +263,9 @@ def playlist_artists(playlist_id: str, request: Request):
 
 @app.get("/api/compare")
 def compare_two_playlists(
+    request: Request,
     playlist_id1: str = Query(..., description="First Spotify playlist ID"),
     playlist_id2: str = Query(..., description="Second Spotify playlist ID"),
-    request: Request = None,
 ):
     """Compare two playlists and return shared songs."""
     try:
@@ -297,6 +298,19 @@ def repeated_songs(request: Request, limit: int = Query(50, ge=1, le=200)):
         sp = get_user_sp(request)
         data = find_repeated_songs(sp=sp, limit=limit)
         return data
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/repeated-albums")
+def repeated_albums(request: Request, limit: int = Query(50, ge=1, le=200)):
+    """Return albums with the most songs/appearances across all playlists."""
+    try:
+        sp = get_user_sp(request)
+        albums = find_repeated_albums(sp=sp, limit=limit)
+        return {"limit": limit, "albums": albums}
     except HTTPException:
         raise
     except Exception as exc:

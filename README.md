@@ -12,7 +12,8 @@ A fully vibecoded minimalist Spotify dashboard. Discover artist dominance, track
 2. **What do these playlists share?** — Compare any two playlists to uncover common songs and shared tracks with album covers.
 3. **Which songs are repeated?** — Identify duplicate songs across your entire library and view all playlists containing each copy.
 4. **Who dominates my library?** — Global artist leaderboard calculating total song presence and distinct playlist reach.
-5. **More to come!**
+5. **Which albums dominate my playlists?** — Leaderboard of albums with the most songs and repeated track appearances across your playlists.
+6. **More to come!**
 
 ---
 
